@@ -173,7 +173,7 @@ A single VPN tunnel is a single point of failure. This guide builds the **highly
 | Peer object | ✅ Peer VPN gateway (2 interfaces) | ✅ 2 × Local Network Gateway |
 | Tunnels | ✅ 2 × IKEv2 tunnels | ✅ 2 × site-to-site connections |
 | BGP sessions | ✅ 2 × manual APIPA sessions | ✅ BGP enabled on both connections |
-| Validation | ✅ Ping `192.168.0.4`: 0% loss | ✅ Ping `10.10.0.2` |
+| Validation | ✅ `gcp-vm` → `192.168.0.4`: 0% loss, ~15 ms | ⏳ Reverse ping `azure-vm` → `10.10.0.2` recommended (not captured) |
 
 ---
 
@@ -883,9 +883,9 @@ Back in GCP: **Network Connectivity → VPN → Cloud VPN tunnels** → **Config
 |---|---|
 | 🟢 GCP tunnels | Both **Established** |
 | 🟣 GCP BGP sessions | Both **BGP established** |
-| 🔷 Azure connections | Both **Connected** |
+| 🔷 Azure connections | Both **Connected** *(expected state; check in the portal)* |
 | 🏓 `gcp-vm` → `192.168.0.4` | Replies, 0% loss |
-| 🏓 `azure-vm` → `10.10.0.2` | Replies, 0% loss |
+| 🏓 `azure-vm` → `10.10.0.2` | Replies, 0% loss *(recommended reverse test, not captured in this build)* |
 
 ```bash
 $ ping 192.168.0.4
