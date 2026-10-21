@@ -1,579 +1,985 @@
-# 🔍 Automated GCP Cost Anomaly Report
+<div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![GCP](https://img.shields.io/badge/GCP-BigQuery-orange.svg)
-![GitHub Actions](https://img.shields.io/badge/CI-GitHub%20Actions-green.svg)
+# 🔐 gcp-azure-ha-vpn-bgp
 
-An intelligent, automated system that monitors Google Cloud Platform (GCP) billing data to detect cost anomalies and send real-time alerts via Slack and GitHub Issues. This solution helps organizations proactively manage cloud costs by identifying unexpected spending patterns before they become expensive problems.
+### Multi-Cloud Private Connectivity · GCP HA VPN ↔ Azure Active-Active VPN Gateway · IPsec/IKEv2 · BGP
 
-## 📑 Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Features](#features)
-- [How It Works](#how-it-works)
-- [Prerequisites](#prerequisites)
-- [Setup Guide](#setup-guide)
-  - [1. GCP Billing Export Configuration](#1-gcp-billing-export-configuration)
-  - [2. Service Account Setup](#2-service-account-setup)
-  - [3. GitHub Secrets Configuration](#3-github-secrets-configuration)
-  - [4. Workflow Configuration](#4-workflow-configuration)
-- [Configuration Parameters](#configuration-parameters)
-- [Anomaly Detection Algorithm](#anomaly-detection-algorithm)
-- [Notification Channels](#notification-channels)
-- [Usage](#usage)
-- [Tuning and Optimization](#tuning-and-optimization)
-- [Troubleshooting](#troubleshooting)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [License](#license)
-
-## 🎯 Overview
-
-The Automated GCP Cost Anomaly Report is a serverless monitoring solution that:
-
-- **Automatically analyzes** daily GCP billing data exported to BigQuery
-- **Detects anomalies** by comparing current costs against historical baselines
-- **Alerts teams** via Slack webhooks and GitHub Issues when unusual spending is detected
-- **Runs daily** via GitHub Actions without requiring dedicated infrastructure
-- **Provides actionable insights** with detailed cost breakdowns by GCP service
-
-## 🏗️ Architecture
-
-```mermaid
-graph TB
-    subgraph "GCP Cloud"
-        A[GCP Services] -->|Generate Costs| B[GCP Billing]
-        B -->|Export Daily| C[BigQuery<br/>Billing Table]
-    end
-    
-    subgraph "GitHub Actions"
-        D[Scheduled Cron<br/>Daily 06:00 UTC] -->|Trigger| E[GitHub Actions Workflow]
-        E -->|Authenticate| F[GCP Service Account]
-        F -->|Query| C
-        E -->|Execute| G[Python Script<br/>detect_cost_anomalies.py]
-    end
-    
-    subgraph "Anomaly Detection Logic"
-        G -->|Fetch Data| H[Query Recent Costs<br/>Yesterday]
-        G -->|Fetch Data| I[Query Baseline Costs<br/>Past 7 Days]
-        H --> J[Compare & Analyze]
-        I --> J
-        J -->|Calculate| K{Anomaly<br/>Detected?}
-    end
-    
-    subgraph "Notification System"
-        K -->|Yes| L[Format Alert Message]
-        L --> M[Send to Slack<br/>Webhook]
-        L --> N[Create GitHub Issue<br/>with Details]
-        K -->|No| O[Log: No Anomalies<br/>End Job]
-    end
-    
-    subgraph "Alert Destinations"
-        M --> P[Slack Channel]
-        N --> Q[GitHub Repository Issues]
-    end
-    
-    style A fill:#4285F4
-    style C fill:#669DF6
-    style G fill:#FFA500
-    style K fill:#FF6B6B
-    style P fill:#611F69
-    style Q fill:#24292E
-    style J fill:#90EE90
-```
-
-### Architecture Flow
-
-1. **Data Collection**: GCP automatically exports billing data to BigQuery daily
-2. **Scheduled Execution**: GitHub Actions runs the workflow daily at 06:00 UTC (configurable)
-3. **Authentication**: Workflow authenticates to GCP using service account credentials
-4. **Data Analysis**: Python script queries BigQuery for recent and baseline costs
-5. **Anomaly Detection**: Algorithm compares current costs against historical baseline
-6. **Alert Generation**: If anomalies are detected, formatted messages are sent
-7. **Notification Delivery**: Alerts are posted to Slack and/or GitHub Issues
-
-## ✨ Features
-
-### 🎯 Core Capabilities
-
-- **Automated Daily Monitoring**: Runs automatically via GitHub Actions without manual intervention
-- **Service-Level Analysis**: Breaks down costs by individual GCP services for granular insights
-- **Intelligent Baseline Comparison**: Compares yesterday's costs against a configurable baseline period
-- **Percentage-Based Anomalies**: Detects when costs exceed historical averages by a specified percentage
-- **Absolute Threshold Detection**: Flags new services or zero-baseline scenarios when costs exceed minimum thresholds
-- **Multi-Channel Notifications**: Sends alerts to both Slack and GitHub Issues simultaneously
-
-### 🔧 Technical Features
-
-- **Flexible Authentication**: Supports both Service Account JSON keys and Workload Identity Federation
-- **Configurable Parameters**: All thresholds and baselines are environment-variable driven
-- **Error Handling**: Robust logging and error management for production reliability
-- **Zero Infrastructure**: Runs entirely on GitHub Actions—no servers to maintain
-- **Cost Efficient**: Free tier GitHub Actions usage for most use cases
-
-## 🔄 How It Works
-
-### Daily Execution Flow
-
-1. **Trigger**: GitHub Actions workflow triggers at scheduled time (default: 06:00 UTC)
-2. **Authentication**: Authenticates to GCP using stored service account credentials
-3. **Data Query**: 
-   - Queries BigQuery for yesterday's costs grouped by service
-   - Queries past N days (default: 7) for baseline comparison
-4. **Analysis**:
-   - Calculates average daily cost for each service over baseline period
-   - Compares yesterday's cost to baseline average
-   - Identifies services exceeding threshold percentage
-   - Flags new services with costs above absolute minimum
-5. **Notification**:
-   - Formats detailed anomaly report
-   - Posts to Slack webhook (if configured)
-   - Creates GitHub Issue (if enabled)
-6. **Logging**: Records all activities and results for audit trail
-
-## 📋 Prerequisites
-
-Before setting up this project, ensure you have:
-
-### GCP Requirements
-- ✅ Active GCP project with billing enabled
-- ✅ BigQuery API enabled
-- ✅ Billing export to BigQuery configured
-- ✅ Service account with BigQuery Data Viewer permissions
-- ✅ Service account JSON key (or Workload Identity configured)
-
-### GitHub Requirements
-- ✅ GitHub repository (this repo)
-- ✅ GitHub Actions enabled
-- ✅ Permissions to add repository secrets
-
-### Optional Requirements
-- ✅ Slack workspace with webhook URL (for Slack notifications)
-- ✅ Basic understanding of YAML, Python, and cloud costs
-
-## 🚀 Setup Guide
-
-### 1. GCP Billing Export Configuration
-
-#### Enable Billing Export to BigQuery
-
-1. Navigate to **GCP Console** → **Billing** → **Billing Export**
-2. Click **Edit Settings** for "Detailed usage cost"
-3. Select or create a BigQuery dataset
-4. Enable export and note the table name format:
-   ```
-   project-id.dataset-name.gcp_billing_export_v1_XXXXXX_XXXXXX_XXXXXX
-   ```
-5. Wait 24 hours for initial data population
-
-### 2. Service Account Setup
-
-#### Create Service Account
-
-```bash
-# Set variables
-export PROJECT_ID="your-project-id"
-export SA_NAME="cost-anomaly-detector"
-
-# Create service account
-gcloud iam service-accounts create $SA_NAME \
-    --description="Service account for cost anomaly detection" \
-    --display-name="Cost Anomaly Detector"
-
-# Grant BigQuery Data Viewer role
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/bigquery.dataViewer"
-
-# Grant BigQuery Job User role (to run queries)
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/bigquery.jobUser"
-
-# Create and download key
-gcloud iam service-accounts keys create key.json \
-    --iam-account=$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com
-```
-
-#### Alternative: Workload Identity Federation (Recommended)
-
-For enhanced security, configure Workload Identity Federation instead of using service account keys. See [GCP Workload Identity Documentation](https://cloud.google.com/iam/docs/workload-identity-federation).
-
-### 3. GitHub Secrets Configuration
-
-Add the following secrets to your GitHub repository:
-
-#### Navigate to Repository Settings
-`Settings` → `Secrets and variables` → `Actions` → `New repository secret`
-
-#### Required Secrets
-
-| Secret Name | Description | Example |
-|------------|-------------|---------|
-| `GCP_SERVICE_ACCOUNT_KEY` | Entire contents of `key.json` file | `{ "type": "service_account", ... }` |
-
-#### Optional Secrets
-
-| Secret Name | Description | Required For |
-|------------|-------------|--------------|
-| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL | Slack notifications |
-
-**Note**: `GITHUB_TOKEN` is automatically provided by GitHub Actions.
-
-### 4. Workflow Configuration
-
-Edit [.github/workflows/detect-cost-anomalies.yml](.github/workflows/detect-cost-anomalies.yml):
-
-```yaml
-- name: Run anomaly detection
-  env:
-    BILLING_TABLE: "your-project.your_dataset.gcp_billing_export_v1_XXXXXX_XXXXXX_XXXXXX"  # UPDATE THIS
-    THRESHOLD_PERCENT: "30"
-    BASELINE_DAYS: "7"
-    MIN_ABSOLUTE_INCREASE: "5.0"
-    # ... other settings
-```
-
-**Important**: Update `BILLING_TABLE` with your actual BigQuery billing table name.
-
-## ⚙️ Configuration Parameters
-
-All configuration is managed via environment variables in the workflow file:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `BILLING_TABLE` | **Required** | Full BigQuery table path: `project.dataset.table` |
-| `THRESHOLD_PERCENT` | `30` | Percentage increase to trigger anomaly (e.g., 30 = 30%) |
-| `BASELINE_DAYS` | `7` | Number of days to use for baseline average calculation |
-| `MIN_ABSOLUTE_INCREASE` | `5.0` | Minimum dollar amount to trigger anomaly for new services (USD) |
-| `SLACK_WEBHOOK_URL` | Optional | Slack webhook URL for notifications |
-| `CREATE_GITHUB_ISSUE` | `false` | Set to `"true"` to create GitHub issues for anomalies |
-| `GITHUB_TOKEN` | Auto | Automatically provided by GitHub Actions |
-| `GITHUB_REPOSITORY` | Auto | Automatically set to `owner/repo` format |
-
-## 🧮 Anomaly Detection Algorithm
-
-The system uses a two-pronged approach to detect cost anomalies:
-
-### 1. Percentage-Based Detection (Established Services)
-
-For services with historical baseline data:
-
-```
-Baseline Average = Total Cost (Past N Days) / N Days
-Percentage Change = ((Yesterday's Cost - Baseline Average) / Baseline Average) × 100
-
-IF Percentage Change > THRESHOLD_PERCENT:
-    → Anomaly Detected
-```
-
-**Example**:
-- Baseline average: $100/day over 7 days
-- Yesterday's cost: $150
-- Percentage change: 50%
-- Threshold: 30%
-- **Result**: ✅ Anomaly (50% > 30%)
-
-### 2. Absolute Threshold Detection (New Services)
-
-For new services with zero or minimal baseline:
-
-```
-IF Baseline Average ≤ 0 AND Yesterday's Cost ≥ MIN_ABSOLUTE_INCREASE:
-    → Anomaly Detected
-```
-
-**Example**:
-- New service with no historical usage
-- Yesterday's cost: $25
-- Minimum threshold: $5
-- **Result**: ✅ Anomaly (new service with significant cost)
-
-### Query Logic
-
-The script executes two BigQuery queries:
-
-#### Baseline Query
-```sql
-SELECT service.description AS service, SUM(cost) AS baseline_total
-FROM `project.dataset.billing_table`
-WHERE DATE(usage_start_time) >= DATE('start_date')
-  AND DATE(usage_start_time) < DATE('yesterday')
-GROUP BY service
-```
-
-#### Recent Query
-```sql
-SELECT service.description AS service, SUM(cost) AS recent_cost
-FROM `project.dataset.billing_table`
-WHERE DATE(usage_start_time) = DATE('yesterday')
-GROUP BY service
-```
-
-## 📢 Notification Channels
-
-### Slack Notifications
-
-When anomalies are detected, Slack receives a formatted message:
-
-```
-*GCP Cost Anomalies for 2024-12-20* — 3 found
-
-*Service:* Compute Engine
-  - Recent: $250.00
-  - Baseline avg/day: $150.00
-  - Change: 66.7%
-  - Note: >30%
-
-*Service:* Cloud Storage
-  - Recent: $75.00
-  - Baseline avg/day: $50.00
-  - Change: 50.0%
-  - Note: >30%
-
-*Service:* Cloud Run
-  - Recent: $30.00
-  - Baseline avg/day: $0.00
-  - Change: N/A
-  - Note: no baseline; recent >= $5.00
-```
-
-### GitHub Issues
-
-When `CREATE_GITHUB_ISSUE: "true"`, the system creates an issue:
-
-**Title**: `[Cost Anomaly] 3 anomaly(s) on 2024-12-20`
-
-**Body**: Same formatted message as Slack + "Detected by automated job."
-
-**Labels**: Can be configured (requires additional workflow customization)
-
-## 📖 Usage
-
-### Manual Trigger
-
-Run the workflow manually for testing:
-
-1. Go to **Actions** tab in your repository
-2. Select "Automated GCP Cost Anomaly Report" workflow
-3. Click **Run workflow** → **Run workflow**
-4. Monitor execution in real-time
-
-### Scheduled Execution
-
-The workflow runs automatically daily at 06:00 UTC. To change the schedule:
-
-```yaml
-on:
-  schedule:
-    - cron: "0 14 * * *"   # 14:00 UTC (2:00 PM UTC)
-```
-
-Use [crontab.guru](https://crontab.guru/) to generate cron expressions.
-
-### Local Testing
-
-Test the script locally before deploying:
-
-```bash
-# Set up environment
-export BILLING_TABLE="your-project.dataset.table"
-export THRESHOLD_PERCENT="30"
-export BASELINE_DAYS="7"
-export MIN_ABSOLUTE_INCREASE="5.0"
-export GOOGLE_APPLICATION_CREDENTIALS="path/to/key.json"
-
-# Optional
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-export CREATE_GITHUB_ISSUE="false"
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run script
-python src/detect_cost_anomalies.py
-```
-
-## 🎛️ Tuning and Optimization
-
-### Adjusting Sensitivity
-
-**Too many false positives?** Increase thresholds:
-```yaml
-THRESHOLD_PERCENT: "50"          # Increase from 30% to 50%
-MIN_ABSOLUTE_INCREASE: "10.0"    # Increase from $5 to $10
-```
-
-**Missing real anomalies?** Decrease thresholds:
-```yaml
-THRESHOLD_PERCENT: "20"          # Decrease to 20%
-MIN_ABSOLUTE_INCREASE: "2.0"     # Decrease to $2
-BASELINE_DAYS: "14"              # Increase baseline to 14 days for smoother average
-```
-
-### Environment-Specific Settings
-
-**Development/Test Environment** (lower costs, higher volatility):
-```yaml
-THRESHOLD_PERCENT: "100"         # 100% increase required
-MIN_ABSOLUTE_INCREASE: "1.0"     # Flag anything over $1
-BASELINE_DAYS: "3"               # Shorter baseline due to frequent changes
-```
-
-**Production Environment** (higher costs, more stable):
-```yaml
-THRESHOLD_PERCENT: "20"          # Sensitive to 20% increases
-MIN_ABSOLUTE_INCREASE: "50.0"    # Only flag significant new costs
-BASELINE_DAYS: "14"              # Longer baseline for stability
-```
-
-### Seasonal Adjustments
-
-For businesses with seasonal patterns:
-- Increase `BASELINE_DAYS` to 14-30 days to smooth out weekly patterns
-- Consider implementing custom baseline logic (requires code modification)
-- Use different thresholds during peak vs. off-peak seasons
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-#### Issue: "BILLING_TABLE environment variable is required"
-**Solution**: Ensure `BILLING_TABLE` is set in workflow file:
-```yaml
-env:
-  BILLING_TABLE: "project.dataset.table"
-```
-
-#### Issue: "Permission denied" or "Access Denied"
-**Solution**: Verify service account has required roles:
-- `roles/bigquery.dataViewer`
-- `roles/bigquery.jobUser`
-
-#### Issue: "Table not found"
-**Solution**: 
-1. Verify billing export is enabled and data is populated (wait 24 hours after enabling)
-2. Check table name format in BigQuery console
-3. Ensure correct project/dataset/table in `BILLING_TABLE`
-
-#### Issue: "No anomalies detected" (but you expect some)
-**Solution**:
-1. Check if billing data is available for yesterday
-2. Lower `THRESHOLD_PERCENT` temporarily to verify detection logic
-3. Review logs in GitHub Actions for query results
-4. Manually query BigQuery to verify data exists
-
-#### Issue: Slack notifications not working
-**Solution**:
-1. Verify `SLACK_WEBHOOK_URL` secret is correctly set
-2. Test webhook URL manually:
-   ```bash
-   curl -X POST -H 'Content-type: application/json' \
-     --data '{"text":"Test message"}' \
-     YOUR_WEBHOOK_URL
-   ```
-3. Check workflow logs for error messages
-
-#### Issue: GitHub Issues not being created
-**Solution**:
-1. Ensure `CREATE_GITHUB_ISSUE: "true"` in workflow
-2. Verify workflow has `issues: write` permission
-3. Check if repository allows issue creation
-
-### Debug Mode
-
-Enable detailed logging by modifying [src/detect_cost_anomalies.py](src/detect_cost_anomalies.py):
-
-```python
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
-```
-
-### Viewing Logs
-
-1. Go to **Actions** tab
-2. Click on latest workflow run
-3. Click on **detect-cost-anomalies** job
-4. Expand **Run anomaly detection** step
-5. Review output for errors or unexpected behavior
-
-## 📁 Project Structure
-
-```
-Automated-GCP-Cost-Anomaly-Report/
-├── .github/
-│   └── workflows/
-│       └── detect-cost-anomalies.yml    # GitHub Actions workflow definition
-├── src/
-│   └── detect_cost_anomalies.py         # Main Python script for anomaly detection
-├── requirements.txt                      # Python dependencies
-└── README.md                            # This file
-```
-
-### File Descriptions
-
-- **`.github/workflows/detect-cost-anomalies.yml`**: Defines the GitHub Actions workflow, including schedule, authentication, and environment variables
-- **`src/detect_cost_anomalies.py`**: Core Python script containing:
-  - BigQuery query logic
-  - Anomaly detection algorithm
-  - Slack notification handler
-  - GitHub issue creation handler
-  - Configuration management
-- **`requirements.txt`**: Python package dependencies:
-  - `google-cloud-bigquery`: GCP BigQuery client library
-  - `requests`: HTTP library for webhooks
-  - `pandas`: Data manipulation (if needed)
-  - `numpy`: Numerical operations (if needed)
-
-## 🤝 Contributing
-
-Contributions are welcome! Here's how you can help:
-
-### Reporting Issues
-
-1. Check existing issues to avoid duplicates
-2. Provide detailed description with:
-   - Environment details (GCP project setup, GitHub Actions logs)
-   - Steps to reproduce
-   - Expected vs. actual behavior
-   - Error messages or logs
-
-### Submitting Pull Requests
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Make your changes with clear commit messages
-4. Test thoroughly (local execution + GitHub Actions)
-5. Update documentation if needed
-6. Submit pull request with detailed description
-
-### Ideas for Contributions
-
-- 🎨 Enhanced visualization of cost trends
-- 📊 Integration with additional notification channels (Teams, PagerDuty, etc.)
-- 🧠 Machine learning-based anomaly detection
-- 📈 Historical trend analysis and reporting
-- 🔄 Support for multi-project billing aggregation
-- 🌍 Multi-cloud support (AWS, Azure)
-- 🎯 Cost optimization recommendations
-
-## 📄 License
-
-This project is open source and available under the [MIT License](LICENSE).
-
-## 🙏 Acknowledgments
-
-- Built with ❤️ for FinOps and cloud cost optimization
-- Powered by Google Cloud Platform, GitHub Actions, and Python
-- Inspired by the need for proactive cloud cost management
-
-## 📞 Support
-
-For questions, issues, or feature requests:
-- 📝 Open an issue in this repository
-- 💬 Join discussions in the Issues tab
-- 📧 Contact the maintainers
+[![Google Cloud](https://img.shields.io/badge/Google_Cloud-HA_VPN-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/network-connectivity/docs/vpn/concepts/overview)
+[![Cloud Router](https://img.shields.io/badge/Cloud_Router-BGP_ASN_65001-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/network-connectivity/docs/router)
+[![Azure](https://img.shields.io/badge/Azure-VPN_Gateway_Active--Active-0078D4?logo=microsoftazure&logoColor=white)](https://learn.microsoft.com/azure/vpn-gateway/vpn-gateway-about-vpngateways)
+[![BGP](https://img.shields.io/badge/BGP-Dynamic_Routing_%2B_APIPA-7C3AED)](https://learn.microsoft.com/azure/vpn-gateway/bgp-howto)
+[![IPsec](https://img.shields.io/badge/IPsec-IKEv2_Site--to--Site-16A34A)](#-theory-the-concepts-you-need)
+[![Status](https://img.shields.io/badge/Demo-Hands--on_%26_Verified-2ECC71)](#-step-12--validate)
 
 ---
 
-**Happy Cost Monitoring! 💰📊**
+*A real, hands-on build of a **highly available, dynamically routed site-to-site VPN between Google Cloud and Microsoft Azure**: a GCP HA VPN gateway with a Cloud Router on one side, an Azure VPN gateway in active-active mode on the other, two IPsec/IKEv2 tunnels, two BGP sessions over APIPA addresses, and a private-IP ping between VMs in each cloud as the proof. Every step is backed by real console screenshots.*
+
+![gcp-azure-ha-vpn-bgp architecture](docs/snapshots/00-architecture/gcp-azure-ha-vpn-architecture.png)
+
+</div>
+
+---
+
+## 📋 Table of Contents
+
+- [Overview](#-overview)
+- [Architecture](#-architecture)
+- [Theory: The Concepts You Need](#-theory-the-concepts-you-need)
+- [Design & Addressing Plan](#-design--addressing-plan)
+- [What Was Built](#-what-was-built)
+- [Prerequisites](#-prerequisites)
+- [Repository Structure](#-repository-structure)
+- [Step 1: Azure Resource Group](#-step-1--azure-resource-group)
+- [Step 2: Azure VNet & Subnets](#-step-2--azure-vnet--subnets)
+- [Step 3: Azure VM](#-step-3--azure-vm)
+- [Step 4: GCP VPC & VM](#-step-4--gcp-vpc--vm)
+- [Step 5: Baseline Ping (Before VPN)](#-step-5--baseline-ping-before-vpn)
+- [Step 6: Azure Public IPs](#-step-6--azure-public-ips)
+- [Step 7: GCP HA VPN, Cloud Router & Tunnels](#-step-7--gcp-ha-vpn-cloud-router--tunnels)
+- [Step 8: Azure Active-Active VPN Gateway](#-step-8--azure-active-active-vpn-gateway)
+- [Step 9: Azure Local Network Gateways](#-step-9--azure-local-network-gateways)
+- [Step 10: Azure Connections](#-step-10--azure-connections)
+- [Step 11: GCP BGP Sessions](#-step-11--gcp-bgp-sessions)
+- [Step 12: Validate](#-step-12--validate)
+- [Gotchas Reference Table](#-gotchas-reference-table)
+- [Troubleshooting](#-troubleshooting)
+- [Cost & Cleanup](#-cost--cleanup)
+- [Snapshots](#-snapshots)
+- [Resources](#-resources)
+
+---
+
+## 🌐 Overview
+
+A single VPN tunnel is a single point of failure. This guide builds the **highly available** pattern: both clouds expose **two** endpoints, two tunnels connect them pairwise, and **BGP** advertises routes dynamically, so if one tunnel dies the routes are withdrawn and traffic shifts to the other. No static routes anywhere.
+
+### 🔑 Key Facts
+
+| Property | Value |
+|---|---|
+| ☁️ **Clouds** | Google Cloud (`us-east1`) and Microsoft Azure (East US) |
+| 🔐 **VPN type** | Site-to-site IPsec, **IKEv2**, pre-shared key |
+| 🔀 **Routing** | Dynamic **BGP**: GCP ASN `65001`, Azure ASN `65002` |
+| 🧵 **Tunnels** | 2 (one per GCP HA VPN interface ↔ one per Azure gateway instance) |
+| 🔗 **BGP peering** | Link-local **APIPA** pairs `169.254.21.x` and `169.254.22.x` |
+| 🖥️ **Test workloads** | `gcp-vm` `10.10.0.2` ↔ `azure-vm` `192.168.0.4` (private IPs only) |
+| 🛠️ **Tooling** | Cloud consoles only (no Terraform in this guide) |
+| 📸 **Evidence** | 64 real console screenshots, sorted by step in [`docs/snapshots/`](docs/snapshots) |
+
+### ✨ What Makes This Different
+
+| Capability | Description |
+|---|---|
+| 🔁 **Full lifecycle, not a fragment** | VMs can't ping → public IPs → GCP gateway & tunnels → Azure gateway, LNGs, connections → BGP sessions → live ping confirmed |
+| 🧪 **Before/after proof** | A baseline failed ping is captured *before* the VPN exists, so the success afterwards actually means something |
+| 🔢 **Every value shown** | IPs, ASNs, APIPA addresses, and names for both clouds in one addressing plan, so you can reproduce it exactly |
+| 🧭 **Right order of operations** | Azure public IPs first → GCP side → Azure side → BGP last, which avoids the chicken-and-egg problem of needing each side's IPs |
+
+### ❓ Why HA VPN + BGP?
+
+| Benefit | How It Showed Up Here |
+|---|---|
+| **99.99% availability design** | Two GCP interfaces, each paired with its own Azure gateway instance |
+| **No static routes** | Routes were learned over BGP as soon as the sessions came up |
+| **Automatic failover** | A failed tunnel's routes are withdrawn by BGP; traffic continues over the other tunnel |
+| **Low cost vs. dedicated links** | Runs over the internet. Good for dev/test, DR links and migrations before moving to Interconnect/ExpressRoute |
+
+---
+
+## 🏛️ Architecture
+
+```
+            GCP (us-east1)                                  Azure (East US)
+  ┌─────────────────────────────┐                 ┌──────────────────────────────────────┐
+  │ VPC: gcp-azure-vpc          │                 │ VNet: gcp_azure_net  192.168.0.0/16  │
+  │ 10.10.0.0/20                │                 │  ├─ gcp_azure_east-us 192.168.0.0/24 │
+  │  └─ gcp-vm   10.10.0.2      │                 │  │    └─ azure-vm  192.168.0.4       │
+  │                             │                 │  └─ GatewaySubnet 192.168.2.0/27     │
+  │ HA VPN GW: gcp-to-azure-vpn │                 │                                      │
+  │  if0 34.152.79.70 ──────────┼── Tunnel 1 ─────┼── 4.156.244.86     (VNG instance 1)  │
+  │  if1 34.177.46.16 ──────────┼── Tunnel 2 ─────┼── 135.234.206.228  (VNG instance 2)  │
+  │                             │   IPsec/IKEv2   │ VNG: active-active, VpnGw2AZ         │
+  │ Cloud Router  ASN 65001     │◄──── BGP ──────►│ BGP ASN 65002                        │
+  │  169.254.21.1 / 169.254.22.1│  (APIPA /30s)   │  169.254.21.2 / 169.254.22.2         │
+  └─────────────────────────────┘                 └──────────────────────────────────────┘
+```
+
+| Tunnel | GCP interface | Azure gateway IP | GCP BGP IP | Azure BGP IP |
+|---|---|---|---|---|
+| 🟢 **Tunnel 1** | `34.152.79.70` (if0) | `4.156.244.86` | `169.254.21.1` | `169.254.21.2` |
+| 🟢 **Tunnel 2** | `34.177.46.16` (if1) | `135.234.206.228` | `169.254.22.1` | `169.254.22.2` |
+
+### 🔄 Build Order
+
+```
+ Azure RG/VNet/VM ──► GCP VPC/VM ──► Baseline ping (fails) ──► Azure public IPs
+        │
+        ▼
+ GCP HA VPN gateway + Cloud Router + 2 tunnels  (BGP "later")
+        │
+        ▼
+ Azure VNG (active-active, BGP, APIPA) ──► 2 Local Network Gateways ──► 2 Connections
+        │
+        ▼
+ GCP BGP sessions (manual APIPA) ──► Tunnels Established ──► Ping succeeds ✅
+```
+
+---
+
+## 🧠 Theory: The Concepts You Need
+
+| Concept | What it is | Role in this build |
+|---|---|---|
+| 🔐 **Site-to-site IPsec VPN** | Encrypted tunnel over the internet between two networks | Needs a public IP per endpoint, an IKE version (**IKEv2**) and a pre-shared key |
+| ☁️ **GCP HA VPN** | Regional Cloud VPN gateway with **two interfaces**, each with its own public IP | Two tunnels over two interfaces gives Google's **99.99% SLA**. Supports **BGP only** |
+| 🧭 **Cloud Router** | The BGP speaker on the GCP side | Learns Azure prefixes, advertises VPC subnets. ASN `65001` |
+| 🔷 **Azure VPN Gateway (active-active)** | Both gateway instances are live, each with its own public IP | Maps one-to-one to the two HA VPN interfaces |
+| 📍 **Local Network Gateway (LNG)** | Azure's object that describes the *remote* site (public IP, ASN, BGP peer IP) | **One LNG per GCP interface**, so two LNGs |
+| 🔀 **BGP** | Dynamic route exchange between the two sides | No static routes, and failed tunnels are withdrawn automatically |
+| 🔗 **APIPA** | Link-local `169.254.x.x` addresses used as BGP peer IPs | Azure accepts only `169.254.21.0`–`169.254.22.255` |
+| 🔢 **ASNs** | Private AS numbers; eBGP needs *different* ones on each side | `65001` (GCP) and `65002` (Azure). Avoid Azure-reserved `65515` |
+
+---
+
+## 📐 Design & Addressing Plan
+
+| Item | ☁️ GCP | 🔷 Azure |
+|---|---|---|
+| Region | `us-east1` | East US |
+| Network | VPC `gcp-azure-vpc` (custom mode) | VNet `gcp_azure_net` `192.168.0.0/16` |
+| Workload subnet | `subnet-east-us` `10.10.0.0/20` | `gcp_azure_east-us` `192.168.0.0/24` |
+| Gateway subnet | not needed | `GatewaySubnet` `192.168.2.0/27` |
+| Test VM | `gcp-vm` `10.10.0.2` (e2-medium, `us-east1-d`) | `azure-vm` `192.168.0.4` (Ubuntu 24.04, B1s) |
+| VPN gateway | HA VPN `gcp-to-azure-vpn` | VNG `gcp_to_azure_vpn`, `VpnGw2AZ`, Gen2, active-active |
+| BGP ASN | `65001` (Cloud Router `gcp-to-azure-vpn-router`) | `65002` |
+| IKE / PSK | IKEv2 / `<YOUR_SHARED_KEY>` | IKEv2 / same key |
+
+> ⚠️ **The two private ranges (`10.10.0.0/20` and `192.168.0.0/16`) must not overlap.**
+>
+> 🔑 **Use your own PSK.** Never reuse a key from screenshots. Generate one with `openssl rand -base64 32`.
+
+---
+
+## 🏗️ What Was Built
+
+| Resource | GCP | Azure |
+|---|---|---|
+| Network | ✅ VPC `gcp-azure-vpc` + subnet | ✅ Resource group, VNet, subnet, `GatewaySubnet` |
+| Test VM | ✅ `gcp-vm` | ✅ `azure-vm` |
+| Public IPs for VPN | ✅ 2 (auto-allocated to HA VPN) | ✅ 2 (Standard, regional) |
+| VPN gateway | ✅ HA VPN gateway (2 interfaces) | ✅ VNG `VpnGw2AZ`, active-active |
+| Routing | ✅ Cloud Router, ASN `65001` | ✅ BGP enabled, ASN `65002`, 2 APIPA IPs |
+| Peer object | ✅ Peer VPN gateway (2 interfaces) | ✅ 2 × Local Network Gateway |
+| Tunnels | ✅ 2 × IKEv2 tunnels | ✅ 2 × site-to-site connections |
+| BGP sessions | ✅ 2 × manual APIPA sessions | ✅ BGP enabled on both connections |
+| Validation | ✅ Ping `192.168.0.4`: 0% loss | ✅ Ping `10.10.0.2` |
+
+---
+
+## ✅ Prerequisites
+
+- ☁️ A **GCP project** with billing and the Compute Engine API enabled
+- 🔷 An **Azure subscription** (free trial works, but `VpnGw2AZ` is billed hourly, see [Cost & Cleanup](#-cost--cleanup))
+- 🛡️ Permission to create networking resources in both clouds
+- 🔥 Firewall rules that allow your test traffic:
+  - **GCP:** allow ICMP and SSH from `192.168.0.0/16` on `gcp-azure-vpc`
+  - **Azure:** the VM's NSG must allow ICMP from `10.10.0.0/20`
+
+---
+
+## 📁 Repository Structure
+
+```
+gcp-azure-ha-vpn-bgp/
+│
+├── docs/
+│   └── snapshots/                           # Real console screenshots, grouped by step
+│       ├── 00-architecture/                 #   architecture diagram
+│       ├── 01-azure-resource-group/         #   4 screenshots
+│       ├── 02-azure-vnet/                   #   7 screenshots
+│       ├── 03-azure-vm/                     #   4 screenshots
+│       ├── 04-gcp-vpc-and-vm/               #   3 screenshots
+│       ├── 05-ping-before-vpn/              #   1 screenshot
+│       ├── 06-azure-public-ips/             #   4 screenshots
+│       ├── 07-gcp-ha-vpn/                   #   9 screenshots
+│       ├── 08-azure-vnet-gateway/           #   5 screenshots
+│       ├── 09-azure-local-network-gateways/ #  10 screenshots
+│       ├── 10-azure-connections/            #  10 screenshots
+│       ├── 11-gcp-bgp-sessions/             #   6 screenshots
+│       └── 12-validation/                   #   1 screenshot
+│
+└── README.md                                # This file
+```
+
+---
+
+## 🔹 Step 1 · Azure Resource Group
+
+**Resource groups → Create.** One resource group holds everything on the Azure side.
+
+| Field | Value |
+|---|---|
+| Subscription | your subscription |
+| Resource group | `gcp_azure` |
+| Region | East US |
+
+<table>
+<tr>
+<td width="50%">
+
+**Resource groups → Create**
+![Resource groups](docs/snapshots/01-azure-resource-group/01-resource-groups-create.png)
+
+</td>
+<td width="50%">
+
+**Basics**
+![Basics](docs/snapshots/01-azure-resource-group/02-basics.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Review + create**
+![Review](docs/snapshots/01-azure-resource-group/03-review.png)
+
+</td>
+<td width="50%">
+
+**Resource group created**
+![Created](docs/snapshots/01-azure-resource-group/04-created.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 2 · Azure VNet & Subnets
+
+**Virtual networks → Create**: VNet `gcp_azure_net`, address space `192.168.0.0/16`, workload subnet `gcp_azure_east-us` `192.168.0.0/24`.
+
+<table>
+<tr>
+<td width="50%">
+
+**All services → Virtual networks**
+![All services](docs/snapshots/02-azure-vnet/01-all-services.png)
+
+</td>
+<td width="50%">
+
+**Basics: resource group `gcp_azure`, name `gcp_azure_net`**
+![Basics](docs/snapshots/02-azure-vnet/02-basics.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**IP addresses: edit the default subnet**
+![Edit subnet](docs/snapshots/02-azure-vnet/04-ip-addresses-edit-subnet.png)
+
+</td>
+<td width="50%">
+
+**Subnet `gcp_azure_east-us` `192.168.0.0/24`**
+![Subnet](docs/snapshots/02-azure-vnet/05-ip-addresses-subnet.png)
+
+</td>
+</tr>
+</table>
+
+![Review](docs/snapshots/02-azure-vnet/06-review.png)
+
+### 🚪 Add the GatewaySubnet
+
+Open the VNet → **Subnets → + Subnet**. Set **Subnet purpose: Virtual Network Gateway** (the name `GatewaySubnet` is fixed), starting address `192.168.2.0`, size `/27`.
+
+> 💡 A `/27` is the minimum Microsoft recommends for the gateway subnet.
+
+<table>
+<tr>
+<td width="50%">
+
+**Add a subnet: purpose Virtual Network Gateway**
+![Add gateway subnet](docs/snapshots/02-azure-vnet/07-add-gateway-subnet.png)
+
+</td>
+<td width="50%">
+
+**Both subnets listed**
+![Subnets list](docs/snapshots/02-azure-vnet/08-subnets-list.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 3 · Azure VM
+
+**Virtual machines → Create → Azure virtual machine.**
+
+| Field | Value |
+|---|---|
+| Resource group | `gcp_azure` |
+| Name | `azure-vm` |
+| Region | East US |
+| Image | Ubuntu Server 24.04 LTS (x64 Gen2) |
+| Networking | VNet `gcp_azure_net`, subnet `gcp_azure_east-us`, new public IP, NSG **Basic**, allow **SSH (22)** |
+
+<table>
+<tr>
+<td width="50%">
+
+**VM list**
+![VM list](docs/snapshots/03-azure-vm/01-vm-list.png)
+
+</td>
+<td width="50%">
+
+**Basics**
+![Basics](docs/snapshots/03-azure-vm/02-basics.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Networking**
+![Networking](docs/snapshots/03-azure-vm/03-networking.png)
+
+</td>
+<td width="50%">
+
+**Review + create**
+![Review](docs/snapshots/03-azure-vm/04-review.png)
+
+</td>
+</tr>
+</table>
+
+✅ **Result:** Azure VM private IP **`192.168.0.4`**
+
+---
+
+## 🔹 Step 4 · GCP VPC & VM
+
+1. **VPC network → Create VPC network:** name `gcp-azure-vpc`, subnet mode **Custom**, subnet `subnet-east-us` in `us-east1` with range `10.10.0.0/20`.
+2. **Compute Engine:** create `gcp-vm` in `us-east1-d` on that subnet, and add a firewall rule allowing ICMP and SSH.
+
+<table>
+<tr>
+<td width="33%">
+
+**Create VPC & subnet**
+![Create VPC](docs/snapshots/04-gcp-vpc-and-vm/01-create-vpc.png)
+
+</td>
+<td width="33%">
+
+**GCP VM internal IP `10.10.0.2`**
+![GCP VM](docs/snapshots/04-gcp-vpc-and-vm/02-gcp-vm-internal-ip.png)
+
+</td>
+<td width="33%">
+
+**Azure VM private IP `192.168.0.4`**
+![Azure VM IP](docs/snapshots/04-gcp-vpc-and-vm/03-azure-vm-private-ip.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 5 · Baseline Ping (Before VPN)
+
+Ping each VM from the other using the **private IP**. Both must **fail**: there is no path between the networks yet.
+
+```bash
+# on gcp-vm
+ping 192.168.0.4
+
+# on azure-vm (SSH or Azure Cloud Shell)
+ping 10.10.0.2
+```
+
+![Ping fails both ways](docs/snapshots/05-ping-before-vpn/01-ping-fails-both-ways.png)
+
+---
+
+## 🔹 Step 6 · Azure Public IPs
+
+An active-active gateway needs **two** Standard public IPs. Create them first so the addresses are known before configuring GCP.
+
+**Public IP addresses → Create** (twice):
+
+| Name | SKU / Tier | Region | Result |
+|---|---|---|---|
+| `gcp_azure_vpn_ip1` | Standard / Regional, IPv4 | East US | `4.156.244.86` |
+| `gcp_azure_vpn_ip2` | Standard / Regional, IPv4 | East US | `135.234.206.228` |
+
+<table>
+<tr>
+<td width="50%">
+
+**Create IP 1**
+![IP 1](docs/snapshots/06-azure-public-ips/01-create-ip1.png)
+
+</td>
+<td width="50%">
+
+**Create IP 2**
+![IP 2](docs/snapshots/06-azure-public-ips/02-create-ip2.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**IP 1: `4.156.244.86`**
+![IP 1 address](docs/snapshots/06-azure-public-ips/03-ip1-address.png)
+
+</td>
+<td width="50%">
+
+**IP 2: `135.234.206.228`**
+![IP 2 address](docs/snapshots/06-azure-public-ips/04-ip2-address.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 7 · GCP HA VPN, Cloud Router & Tunnels
+
+> 🧭 **Console path:** Network Connectivity → VPN → **Create VPN connection** → **High-availability (HA) VPN**
+
+<table>
+<tr>
+<td width="50%">
+
+**VPN landing page**
+![VPN landing](docs/snapshots/07-gcp-ha-vpn/01-vpn-landing.png)
+
+</td>
+<td width="50%">
+
+**Select High-availability (HA) VPN**
+![Select HA VPN](docs/snapshots/07-gcp-ha-vpn/02-select-ha-vpn.png)
+
+</td>
+</tr>
+</table>
+
+### 7.1 · Create the HA VPN gateway
+
+| Field | Value |
+|---|---|
+| Name | `gcp-to-azure-vpn` |
+| Network | `gcp-azure-vpc` |
+| Region | `us-east1` |
+| Stack type | IPv4 (single-stack) |
+
+Google allocates two public IPs: **`34.152.79.70`** (interface 0) and **`34.177.46.16`** (interface 1).
+
+![Create HA VPN gateway](docs/snapshots/07-gcp-ha-vpn/03-create-ha-vpn-gateway.png)
+
+### 7.2 · Create the peer VPN gateway
+
+**Add VPN tunnels → Peer VPN gateway → Create new peer VPN gateway**: name `gcp-to-azure-vpn-gateway`, **two interfaces**, entering the two Azure public IPs.
+
+| Interface | IP |
+|---|---|
+| Interface 0 | `4.156.244.86` |
+| Interface 1 | `135.234.206.228` |
+
+![Peer VPN gateway](docs/snapshots/07-gcp-ha-vpn/04-peer-vpn-gateway.png)
+
+### 7.3 · Create the Cloud Router
+
+**Cloud Router → Create new router**: name `gcp-to-azure-vpn-router`, network `gcp-azure-vpc`, **ASN `65001`**, advertise all subnets (default).
+
+![Cloud Router](docs/snapshots/07-gcp-ha-vpn/05-create-cloud-router.png)
+
+### 7.4 · Create the two tunnels
+
+<table>
+<tr>
+<td width="50%">
+
+**Tunnel 1**
+
+| Field | Value |
+|---|---|
+| GCP interface | `0: 34.152.79.70` |
+| Peer interface | `0: 4.156.244.86` |
+| Name | `gcp-to-azure-vpn-tunnel-1` |
+| IKE | IKEv2 |
+| PSK | `<YOUR_SHARED_KEY>` |
+
+![Tunnel 1](docs/snapshots/07-gcp-ha-vpn/06-tunnel-1.png)
+
+</td>
+<td width="50%">
+
+**Tunnel 2**
+
+| Field | Value |
+|---|---|
+| GCP interface | `1: 34.177.46.16` |
+| Peer interface | `1: 135.234.206.228` |
+| Name | `gcp-to-azure-vpn-tunnel-2` |
+| IKE | IKEv2 |
+| PSK | same key as tunnel 1 |
+
+![Tunnel 2](docs/snapshots/07-gcp-ha-vpn/07-tunnel-2.png)
+
+</td>
+</tr>
+</table>
+
+### 7.5 · Defer BGP
+
+At **Configure BGP sessions**, choose **Configure BGP sessions later** (the Azure APIPA addresses and ASN don't exist yet) and save. The tunnels show **First handshake** until the Azure side is built. That is expected.
+
+<table>
+<tr>
+<td width="50%">
+
+**Configure BGP sessions later**
+![BGP later](docs/snapshots/07-gcp-ha-vpn/08-configure-bgp-later.png)
+
+</td>
+<td width="50%">
+
+**Tunnels in "First handshake"**
+![First handshake](docs/snapshots/07-gcp-ha-vpn/09-tunnels-first-handshake.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 8 · Azure Active-Active VPN Gateway
+
+**Virtual network gateways → Create.**
+
+### 8.1 · Basics
+
+| Field | Value |
+|---|---|
+| Name | `gcp_to_azure_vpn` ⚠️ *see naming note* |
+| Region | East US |
+| Gateway type | VPN |
+| SKU | `VpnGw2AZ` (BGP needs a Standard-or-higher SKU) |
+| Generation | Generation 2 |
+| Virtual network | `gcp_azure_net` (picks up `GatewaySubnet`) |
+
+> ⚠️ **Naming note:** in this demo the gateway ended up as `gcp_to_azure_vpn`. `azure_to_gcp_vpn` would describe the direction better. The screenshots use the former, so this guide does too.
+
+<table>
+<tr>
+<td width="50%">
+
+**Virtual network gateways: Create**
+![VNG list](docs/snapshots/08-azure-vnet-gateway/01-vng-list.png)
+
+</td>
+<td width="50%">
+
+**Basics**
+![Basics](docs/snapshots/08-azure-vnet-gateway/02-basics.png)
+
+</td>
+</tr>
+</table>
+
+### 8.2 · Public IPs, active-active and BGP
+
+| Field | Value |
+|---|---|
+| Public IP address | **Use existing** → `gcp_azure_vpn_ip1` (`4.156.244.86`) |
+| Enable active-active mode | ✅ **Enabled** |
+| Second public IP | **Use existing** → `gcp_azure_vpn_ip2` (`135.234.206.228`) |
+| Configure BGP | ✅ **Enabled** |
+| ASN | **`65002`** |
+| Custom Azure APIPA BGP IP addresses | **`169.254.21.2`** and **`169.254.22.2`** |
+
+![Active-active and BGP](docs/snapshots/08-azure-vnet-gateway/03-active-active-bgp-apipa.png)
+
+### 8.3 · Review and deploy
+
+Confirm active-active **Enabled**, BGP **Enabled**, ASN `65002`, both APIPA addresses and both public IPs. VPN gateways are slow to provision, often **30–45 minutes**.
+
+<table>
+<tr>
+<td width="50%">
+
+**Review + create (validation passed)**
+![Review](docs/snapshots/08-azure-vnet-gateway/04-review.png)
+
+</td>
+<td width="50%">
+
+**Deployment complete**
+![Deployment complete](docs/snapshots/08-azure-vnet-gateway/05-deployment-complete.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 9 · Azure Local Network Gateways
+
+You need **one LNG per GCP interface**. **Local network gateways → Create.**
+
+| Setting | 📍 LNG 1 | 📍 LNG 2 |
+|---|---|---|
+| Name | `azure-t0-gcp-network-gateway-1` | `azure-t0-gcp-network-gateway-2` |
+| Region / RG | East US / `gcp_azure` | East US / `gcp_azure` |
+| Endpoint | IP address | IP address |
+| IP address (GCP interface) | **`34.152.79.70`** | **`34.177.46.16`** |
+| Address space | **`169.254.21.1/32`** | **`169.254.22.1/32`** |
+| Configure BGP settings | **Yes** | **Yes** |
+| ASN (Google's) | **`65001`** | **`65001`** |
+| BGP peer IP address | **`169.254.21.1`** | **`169.254.22.1`** |
+
+> 💡 Both LNGs use the **same Google ASN (`65001`)** because both GCP interfaces belong to the same Cloud Router. The BGP peer IP and `/32` address space must match the Cloud Router IP you assign in Step 11.
+
+### LNG 1
+
+<table>
+<tr>
+<td width="50%">
+
+**Local network gateways list**
+![LNG list](docs/snapshots/09-azure-local-network-gateways/01-lng-list.png)
+
+</td>
+<td width="50%">
+
+**Basics: Google IP + address space**
+![LNG1 basics](docs/snapshots/09-azure-local-network-gateways/02-lng1-basics.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Advanced: enable BGP**
+![BGP toggle](docs/snapshots/09-azure-local-network-gateways/03-lng1-advanced-bgp-toggle.png)
+
+</td>
+<td width="50%">
+
+**Advanced: Google ASN + BGP peer IP**
+![ASN and peer](docs/snapshots/09-azure-local-network-gateways/04-lng1-advanced-asn-peer.png)
+
+</td>
+</tr>
+</table>
+
+![LNG1 review](docs/snapshots/09-azure-local-network-gateways/05-lng1-review.png)
+
+### LNG 2
+
+<table>
+<tr>
+<td width="50%">
+
+**Basics**
+![LNG2 basics](docs/snapshots/09-azure-local-network-gateways/06-lng2-basics.png)
+
+</td>
+<td width="50%">
+
+**Advanced**
+![LNG2 advanced](docs/snapshots/09-azure-local-network-gateways/07-lng2-advanced.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Review**
+![LNG2 review](docs/snapshots/09-azure-local-network-gateways/08-lng2-review.png)
+
+</td>
+<td width="50%">
+
+**Both deployments complete**
+![LNG1 deployed](docs/snapshots/09-azure-local-network-gateways/09-lng1-deployment.png)
+![LNG2 deployed](docs/snapshots/09-azure-local-network-gateways/10-lng2-deployment.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 10 · Azure Connections
+
+Open the virtual network gateway → **Settings → Connections → + Add.** Create **one connection per tunnel**.
+
+<table>
+<tr>
+<td width="50%">
+
+**Gateway overview → Connections**
+![Gateway overview](docs/snapshots/10-azure-connections/01-vng-overview.png)
+
+</td>
+<td width="50%">
+
+**Connections → Add**
+![Add connection](docs/snapshots/10-azure-connections/02-connections-add.png)
+
+</td>
+</tr>
+</table>
+
+| Setting | 🔗 Connection 1 | 🔗 Connection 2 |
+|---|---|---|
+| Connection type | Site-to-site (IPsec) | Site-to-site (IPsec) |
+| Name | `azure-to-gcp-tunnel-1` | `azure-to-gcp-tunnel-2` |
+| Virtual network gateway | `gcp_to_azure_vpn` | `gcp_to_azure_vpn` |
+| Local network gateway | `azure-t0-gcp-network-gateway-1` | `azure-t0-gcp-network-gateway-2` |
+| Authentication | Shared key (PSK) `<YOUR_SHARED_KEY>` | **same PSK** |
+| IKE protocol | **IKEv2** | **IKEv2** |
+| Enable BGP | ✅ Checked | ✅ Checked |
+| IPsec/IKE policy | Default | Default |
+
+### Connection 1
+
+<table>
+<tr>
+<td width="33%">
+
+**Basics**
+![Conn1 basics](docs/snapshots/10-azure-connections/03-conn1-basics.png)
+
+</td>
+<td width="33%">
+
+**Settings**
+![Conn1 settings](docs/snapshots/10-azure-connections/04-conn1-settings.png)
+
+</td>
+<td width="33%">
+
+**Review**
+![Conn1 review](docs/snapshots/10-azure-connections/05-conn1-review.png)
+
+</td>
+</tr>
+</table>
+
+### Connection 2
+
+<table>
+<tr>
+<td width="33%">
+
+**Basics**
+![Conn2 basics](docs/snapshots/10-azure-connections/06-conn2-basics.png)
+
+</td>
+<td width="33%">
+
+**Settings**
+![Conn2 settings](docs/snapshots/10-azure-connections/07-conn2-settings.png)
+
+</td>
+<td width="33%">
+
+**Review**
+![Conn2 review](docs/snapshots/10-azure-connections/08-conn2-review.png)
+
+</td>
+</tr>
+</table>
+
+**Both deployments complete:**
+
+<table>
+<tr>
+<td width="50%">
+
+![Conn1 deployed](docs/snapshots/10-azure-connections/09-conn1-deployment.png)
+
+</td>
+<td width="50%">
+
+![Conn2 deployed](docs/snapshots/10-azure-connections/10-conn2-deployment.png)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🔹 Step 11 · GCP BGP Sessions
+
+Back in GCP: **Network Connectivity → VPN → Cloud VPN tunnels** → **Configure BGP session** on each tunnel.
+
+![Configure BGP session](docs/snapshots/11-gcp-bgp-sessions/01-configure-bgp-session.png)
+
+| Setting | 🟣 Tunnel 1 | 🟣 Tunnel 2 |
+|---|---|---|
+| Session name | `gcp-to-azure-bgp-1` | `gcp-project-bgp-2` *(suggest `gcp-to-azure-bgp-2`)* |
+| Peer ASN | **`65002`** | **`65002`** |
+| Allocate BGP IPv4 address | **Manually** | **Manually** |
+| Cloud Router BGP IPv4 address | **`169.254.21.1`** | **`169.254.22.1`** |
+| BGP peer IPv4 address | **`169.254.21.2`** | **`169.254.22.2`** |
+
+<table>
+<tr>
+<td width="50%">
+
+**Session 1: name + peer ASN**
+![BGP session 1](docs/snapshots/11-gcp-bgp-sessions/02-bgp-session-1.png)
+
+</td>
+<td width="50%">
+
+**Session 1: manual APIPA addresses**
+![Manual IPs](docs/snapshots/11-gcp-bgp-sessions/03-bgp-session-1-manual-ips.png)
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Session 1: BGP established**
+![Established](docs/snapshots/11-gcp-bgp-sessions/04-bgp-session-1-established.png)
+
+</td>
+<td width="50%">
+
+**Session 2: name, ASN, manual APIPA**
+![BGP session 2](docs/snapshots/11-gcp-bgp-sessions/05-bgp-session-2.png)
+
+</td>
+</tr>
+</table>
+
+🟢 **Both tunnels: Established · Both BGP sessions: BGP established**
+
+![Both established](docs/snapshots/11-gcp-bgp-sessions/06-both-established.png)
+
+---
+
+## 🔹 Step 12 · Validate
+
+| Check | Expected |
+|---|---|
+| 🟢 GCP tunnels | Both **Established** |
+| 🟣 GCP BGP sessions | Both **BGP established** |
+| 🔷 Azure connections | Both **Connected** |
+| 🏓 `gcp-vm` → `192.168.0.4` | Replies, 0% loss |
+| 🏓 `azure-vm` → `10.10.0.2` | Replies, 0% loss |
+
+```bash
+$ ping 192.168.0.4
+64 bytes from 192.168.0.4: icmp_seq=1 ttl=63 time=16.3 ms
+64 bytes from 192.168.0.4: icmp_seq=2 ttl=63 time=14.9 ms
+64 bytes from 192.168.0.4: icmp_seq=3 ttl=63 time=15.1 ms
+--- 192.168.0.4 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss
+rtt min/avg/max/mdev = 14.893/15.435/16.291/0.612 ms
+```
+
+![Ping success](docs/snapshots/12-validation/01-ping-gcp-to-azure-success.png)
+
+🎉 **Private connectivity between two clouds, about 15 ms round trip, with no static routes.**
+
+> 🧪 **Optional HA test:** start a continuous ping, then delete or disable one tunnel. BGP withdraws that tunnel's routes and traffic continues over the other, with a brief blip.
+
+---
+
+## 🛡️ Gotchas Reference Table
+
+| Area | Gotcha |
+|---|---|
+| 🧭 Order of operations | Create the Azure public IPs first, then GCP, then Azure gateway/LNGs/connections, and BGP on GCP last. Otherwise you are guessing IPs |
+| 🔗 APIPA range | Azure only accepts `169.254.21.0`–`169.254.22.255` |
+| 🔢 ASNs | Must differ between sides (eBGP). Both LNGs use the same Google ASN |
+| 🎯 Matching values | LNG BGP peer IP = Cloud Router IP on GCP; GCP BGP peer IP = Azure APIPA IP. One typo and BGP never establishes |
+| 🔀 BGP on both ends | Enable BGP on the Azure gateway **and** on each connection |
+| 🔑 PSK | Identical on GCP tunnels and Azure connections |
+| 🧱 GatewaySubnet | Must be named `GatewaySubnet`; `/27` or larger |
+| 🌐 Overlap | `10.10.0.0/20` and `192.168.0.0/16` must not overlap |
+| 🔥 Firewalls | VPN does not bypass GCP firewall rules or Azure NSGs. ICMP must be allowed |
+| 🏷️ Naming | Name gateways by direction from the start (`azure_to_gcp_vpn`) |
+
+---
+
+## 🔧 Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Tunnel stuck on *First handshake* / *Waiting* | PSK mismatch, wrong peer IP, or IKE version mismatch (use IKEv2 on both sides). Note: it also stays here until the Azure side exists |
+| Tunnel up but BGP **not** established | ASN mismatch, wrong BGP peer IP, or APIPA outside the allowed range |
+| BGP up but ping fails | GCP firewall / Azure NSG not allowing ICMP, or overlapping address ranges |
+| Azure connection *Not connected* | BGP enabled on the connection but not on the gateway (or the reverse), or PSK mismatch |
+| Gateway deployment seems stuck | Normal: VPN gateways take 30–45 minutes |
+
+---
+
+## 💰 Cost & Cleanup
+
+⚠️ **`VpnGw2AZ` and the two public IPs are billed while they exist.** Both clouds also charge for the VPN tunnels and egress data. See the official pricing pages before leaving this running.
+
+**Cleanup**
+
+1. 🔷 **Azure:** delete the resource group `gcp_azure` (removes the VNet, VMs, gateway, LNGs, connections and public IPs)
+2. ☁️ **GCP:** delete the two VPN tunnels, the HA VPN gateway, the peer VPN gateway, the Cloud Router, `gcp-vm`, and finally the VPC `gcp-azure-vpc`
+
+---
+
+## 📸 Snapshots
+
+Real screenshots taken directly from the Google Cloud and Azure consoles while building this demo, all under [`docs/snapshots/`](docs/snapshots), grouped by step.
+
+| Folder | Step | Files |
+|---|---|---|
+| `00-architecture` | Architecture diagram | 1 |
+| `01-azure-resource-group` | Resource group | 4 |
+| `02-azure-vnet` | VNet, subnets, GatewaySubnet | 7 |
+| `03-azure-vm` | Azure VM | 4 |
+| `04-gcp-vpc-and-vm` | GCP VPC, VM, IPs | 3 |
+| `05-ping-before-vpn` | Baseline failed ping | 1 |
+| `06-azure-public-ips` | Two public IPs | 4 |
+| `07-gcp-ha-vpn` | HA VPN gateway, router, tunnels | 9 |
+| `08-azure-vnet-gateway` | Active-active VNG | 5 |
+| `09-azure-local-network-gateways` | Two LNGs | 10 |
+| `10-azure-connections` | Two connections | 10 |
+| `11-gcp-bgp-sessions` | BGP sessions | 6 |
+| `12-validation` | Successful ping | 1 |
+
+---
+
+## 🔗 Resources
+
+- [Cloud VPN: HA VPN overview](https://cloud.google.com/network-connectivity/docs/vpn/concepts/overview)
+- [Cloud Router overview](https://cloud.google.com/network-connectivity/docs/router)
+- [Azure VPN Gateway: About](https://learn.microsoft.com/azure/vpn-gateway/vpn-gateway-about-vpngateways)
+- [Azure VPN Gateway: BGP how-to](https://learn.microsoft.com/azure/vpn-gateway/bgp-howto)
+
+---
+
+<div align="center">
+
+**Maintained by Bikram Singh**
+
+*Built and verified hands-on with Google Cloud HA VPN and Azure VPN Gateway*
+
+</div>
